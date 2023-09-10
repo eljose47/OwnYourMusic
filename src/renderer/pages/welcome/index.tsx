@@ -1,5 +1,7 @@
 import * as React from "react";
 import { Link, Route, RouteObject } from "react-router-dom";
+import WelcomeServicesPage from "./services";
+import WelcomeLocalFilesPages from "./localFiles";
 
 const WelcomePage: React.FunctionComponent<WelcomePageProps> = (props) => {
   return (
@@ -21,7 +23,7 @@ const WelcomePage: React.FunctionComponent<WelcomePageProps> = (props) => {
       </div>
 
       <br />
-      <Link to="">Let's go</Link>
+      <Link to="services">Let's go</Link>
     </div>
   );
 };
@@ -40,8 +42,12 @@ export const WelcomeRoute: RouteObject = {
       element: <WelcomePage />,
     },
     {
-      path: "nested",
-      element: "hello this is the nested route. How can I help you?",
+      path: "services",
+      element: <WelcomeServicesPage />,
+    },
+    {
+      path: "localFiles",
+      element: <WelcomeLocalFilesPages />,
     },
   ],
 };

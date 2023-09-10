@@ -20,6 +20,9 @@ export class Track {
   @PrimaryGeneratedColumn()
   id: string;
 
+  @Column({ unique: true, nullable: true })
+  isrc?: string;
+
   @Column()
   name: string;
 
@@ -31,43 +34,29 @@ export class Track {
   @JoinTable()
   artists: Relation<Artist>[];
 
-  @Column()
-  releaseDate: Date;
+  @Column({ nullable: true })
+  releaseDate?: Date;
 
   @ManyToMany((type) => Genre, (genre) => genre.relatedTracks)
   @JoinTable()
   genres: Relation<Genre>[];
 
-  @OneToOne((type) => File, (file) => file.track, {
-    nullable: true,
+  @OneToMany((type) => TrackServiceReference, (ref) => ref.track, {
     cascade: true,
   })
-  @JoinColumn()
-  fileReference?: Relation<File>;
-
-  @Column({ nullable: true, unique: true })
-  mbId?: string;
-
-  @Column({ nullable: true, unique: true })
-  spotifyId?: string;
+  serviceRefs: Relation<TrackServiceReference>[];
 }
 
 @Entity()
-export class File {
+export class TrackServiceReference {
+  @Column()
+  type: string;
+
   @PrimaryColumn()
-  path: string;
+  serviceId: string;
 
-  // @Column()
-  // type: string;
-
-  @OneToOne((type) => Track, (track) => track.fileReference)
+  @ManyToOne((type) => Track, (track) => track.serviceRefs)
   track: Relation<Track>;
-
-  @Column("json", { nullable: true })
-  artists?: string[];
-
-  @Column({ nullable: true })
-  album?: string;
 }
 
 @Entity()
@@ -101,8 +90,22 @@ export class Album {
   @Column({ nullable: true, unique: true })
   spotifyId?: string;
 
-  @Column({ nullable: true, unique: true })
-  mbId?: string;
+  @OneToMany((type) => AlbumServiceReference, (ref) => ref.album, {
+    cascade: true,
+  })
+  serviceRefs: Relation<AlbumServiceReference>[];
+}
+
+@Entity()
+export class AlbumServiceReference {
+  @Column()
+  type: string;
+
+  @PrimaryColumn()
+  serviceId: string;
+
+  @ManyToOne((type) => Album, (album) => album.serviceRefs)
+  album: Relation<Album>;
 }
 
 @Entity()
@@ -116,12 +119,26 @@ export class Artist {
   @Column({ nullable: true, unique: true })
   spotifyId?: string;
 
-  @Column({ nullable: true, unique: true })
-  mbId?: string;
-
   @ManyToMany((type) => Track, (track) => track.artists)
   tracks: Relation<Track>[];
 
   @OneToMany((type) => Album, (track) => track.artist)
   albums: Relation<Album>[];
+
+  @OneToMany((type) => ArtistServiceReference, (ref) => ref.artist, {
+    cascade: true,
+  })
+  serviceRefs: Relation<ArtistServiceReference>[];
+}
+
+@Entity()
+export class ArtistServiceReference {
+  @Column()
+  type: string;
+
+  @PrimaryColumn()
+  serviceId: string;
+
+  @ManyToOne((type) => Artist, (artist) => artist.serviceRefs)
+  artist: Relation<Artist>;
 }

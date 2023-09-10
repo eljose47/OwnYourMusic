@@ -2,7 +2,8 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 
 import { contextBridge, ipcRenderer } from "electron";
-import { Track } from "./main/typeorm/music";
+import type { Track } from "./main/typeorm/music";
+import type { ServiceType } from "./main/services/base";
 
 interface ElectronApi {
   doStuff(): Promise<any>;
@@ -25,11 +26,12 @@ declare global {
 }
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  doStuff: () => ipcRenderer.send("doStuff"),
+  doStuff: () => ipcRenderer.invoke("doStuff"),
   getAllTracks: () => ipcRenderer.invoke("getAllTracks"),
   getGoogleSession: () => ipcRenderer.invoke("getGoogleSession"),
   getGoogleStuff: () => ipcRenderer.invoke("getGoogleStuff"),
-  getSpotifyStuff: () => ipcRenderer.invoke("getSpotifyStuff"),
+  getSavedTracks: (type: ServiceType) =>
+    ipcRenderer.invoke("getSpotifyStuff", type),
   authenticate: {
     spotify: () => ipcRenderer.invoke("authenticateSpotify"),
   },

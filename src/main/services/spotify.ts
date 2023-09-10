@@ -1,13 +1,12 @@
-import { BrowserView, BrowserWindow } from "electron";
+import { BrowserWindow } from "electron";
 import SpotifyWebApi from "spotify-web-api-node";
-import {
-  AppDataSource,
-  albumRepository,
-  artistRepository,
-  trackRepository,
-} from "../typeorm";
+import { AppDataSource } from "../typeorm";
 import { Session } from "../typeorm/auth";
-import { Track } from "../typeorm/music";
+import {
+  GenericServiceWithAuthentication,
+  Track as ClientTrack,
+  SearchForTrackParams,
+} from "./base";
 
 const sessionRepo = AppDataSource.getRepository(Session);
 
@@ -15,9 +14,13 @@ type AuthResponse = Awaited<
   ReturnType<SpotifyWebApi["authorizationCodeGrant"]>
 >["body"];
 
-export class Spotify extends SpotifyWebApi {
+export class Spotify implements GenericServiceWithAuthentication {
+  type = "spotify" as const;
+  isAuthenticated: boolean;
+  private apiClient: SpotifyWebApi;
+
   constructor() {
-    super({
+    this.apiClient = new SpotifyWebApi({
       clientId: process.env.SPOTIFY_CLIENT_ID,
       clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
       redirectUri: "http://localhost:3000",
@@ -25,9 +28,7 @@ export class Spotify extends SpotifyWebApi {
   }
 
   async startAuthFlow() {
-    const url = this.createAuthorizeURL(["user-library-read"], "");
-    console.log("url", url);
-
+    const url = this.apiClient.createAuthorizeURL(["user-library-read"], "");
     const authWindow = new BrowserWindow({});
 
     const code = await new Promise<string>((res, rej) => {
@@ -63,9 +64,9 @@ export class Spotify extends SpotifyWebApi {
       authWindow.loadURL(url);
     });
 
-    const { body: tokens } = await this.authorizationCodeGrant(code);
-    this.setAccessToken(tokens.access_token);
-    this.setRefreshToken(tokens.refresh_token);
+    const { body: tokens } = await this.apiClient.authorizationCodeGrant(code);
+    this.apiClient.setAccessToken(tokens.access_token);
+    this.apiClient.setRefreshToken(tokens.refresh_token);
     await this.storeSessionInDb(tokens);
   }
 
@@ -80,15 +81,15 @@ export class Spotify extends SpotifyWebApi {
       return;
     }
 
-    this.setAccessToken(dbSession.access_token);
-    this.setRefreshToken(dbSession.refresh_token);
+    this.apiClient.setAccessToken(dbSession.access_token);
+    this.apiClient.setRefreshToken(dbSession.refresh_token);
     let expiryDateNum = new Date(dbSession.expires_in).valueOf();
 
     if (expiryDateNum < Date.now()) {
-      const { body: tokenSet } = await this.refreshAccessToken();
+      const { body: tokenSet } = await this.apiClient.refreshAccessToken();
       // if(tokenSet && "refresh_token" in tokenSet && "access_token" in tokenSet)
 
-      this.setAccessToken(tokenSet.access_token);
+      this.apiClient.setAccessToken(tokenSet.access_token);
       // this.setRefreshToken(tokenSet.refresh_token);
       expiryDateNum = Date.now() + tokenSet.expires_in;
 
@@ -121,79 +122,68 @@ export class Spotify extends SpotifyWebApi {
 
     if (!auth) {
       await this.startAuthFlow();
-      return;
     }
+
+    this.isAuthenticated = true;
   }
 
-  async getAllSavedTracks(): Promise<SpotifyApi.SavedTrackObject[]> {
+  private convertSpotifyTrack(track: SpotifyApi.TrackObjectFull): ClientTrack {
+    return {
+      title: track.name,
+      isrc: track.external_ids.isrc,
+      serviceId: track.id,
+      album: {
+        title: track.album.name,
+        serviceId: track.album.id,
+        artists: track.album.artists.map((a) => ({
+          title: a.name,
+          serviceId: a.id,
+        })),
+      },
+      artists: track.artists.map((a) => ({ title: a.name, serviceId: a.id })),
+    };
+  }
+
+  async getSavedTracks(): Promise<ClientTrack[]> {
     const tracks: SpotifyApi.SavedTrackObject[] = [];
     const limit = 50;
 
-    const firstResponse = await this.getMySavedTracks({ limit, offset: 0 });
+    const firstResponse = await this.apiClient.getMySavedTracks({
+      limit,
+      offset: 0,
+    });
 
     const length = tracks.push(...firstResponse.body.items);
     const totalItems = firstResponse.body.total;
 
     if (length < limit) {
-      return tracks;
+      const requests = [];
+      for (let i = limit; i < totalItems; i += limit) {
+        requests.push(
+          this.apiClient.getMySavedTracks({ limit: limit, offset: i })
+        );
+      }
+
+      const responses = await Promise.all(requests);
+      tracks.push(...responses.map((r) => r.body.items).flat());
     }
 
-    const requests = [];
-    for (let i = limit; i < totalItems; i += limit) {
-      requests.push(this.getMySavedTracks({ limit: limit, offset: i }));
-    }
-
-    const responses = await Promise.all(requests);
-    tracks.push(...responses.map((r) => r.body.items).flat());
-    return tracks;
+    return tracks.map(({ track }) => this.convertSpotifyTrack(track));
   }
 
-  async syncWithDb() {
-    const tracks = await this.getAllSavedTracks();
-    await Promise.all(
-      tracks.map(async ({ track }) => {
-        let trackRecord = await trackRepository.findOne({
-          where: [
-            {
-              spotifyId: track.id,
-            },
-            {
-              name: track.name,
-              fileReference: {
-                album: track.album.name,
-                artists: track.artists[0].name,
-              },
-            },
-          ],
-          relations: { fileReference: true },
-        });
+  async searchForTrack(params: SearchForTrackParams): Promise<ClientTrack[]> {
+    let query = `track:${params.track}`;
+    if (params.artist) {
+      query += ` artist:${params.artist}`;
+    }
+    if (params.album) {
+      query += ` album:${params.album}`;
+    }
 
-        if (!trackRecord) {
-          trackRecord = new Track();
-          trackRecord.name = track.name;
-          trackRecord.releaseDate = new Date(track.album.release_date);
+    const response = await this.apiClient.searchTracks(query);
 
-          await Promise.all(
-            track.artists.map((artist) =>
-              artistRepository.upsert(
-                { name: artist.name, spotifyId: artist.id },
-                ["spotifyId"]
-              )
-            )
-          );
-
-          await albumRepository.upsert(
-            {
-              name: track.album.name,
-              spotifyId: track.album.id,
-            },
-            ["spotifyId"]
-          );
-        }
-
-        trackRecord.spotifyId = track.id;
-        await trackRepository.save(trackRecord);
-      })
+    return response.body.tracks!.items.map((track) =>
+      this.convertSpotifyTrack(track)
     );
   }
 }
